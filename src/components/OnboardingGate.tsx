@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import {
   UserRole,
@@ -102,6 +102,16 @@ export const OnboardingGate: React.FC<OnboardingGateProps> = ({ children, target
 
   // Submission state
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const [submissionStage, setSubmissionStage] = useState<string>('');
+  const isSubmittingRef = useRef<boolean>(false);
+  const [cachedStorageUrls, setCachedStorageUrls] = useState<{
+    frontUrl: string;
+    frontPath: string;
+    backUrl?: string;
+    backPath?: string;
+    photoUrl?: string;
+    photoPath?: string;
+  } | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<UploadProgressState | null>(null);
 
@@ -215,6 +225,8 @@ export const OnboardingGate: React.FC<OnboardingGateProps> = ({ children, target
   };
 
   const handleIdFrontSelected = async (file: File | Blob) => {
+    setCachedStorageUrls(null);
+    setSubmitError(null);
     const compressed = await compressImageBeforeUpload(file, 1600, 1600, 0.85);
     setIdFrontBlob(compressed.blob);
     const previewUrl = URL.createObjectURL(compressed.blob);
@@ -225,6 +237,8 @@ export const OnboardingGate: React.FC<OnboardingGateProps> = ({ children, target
   };
 
   const handlePhotoSelected = async (file: File | Blob) => {
+    setCachedStorageUrls(null);
+    setSubmitError(null);
     const compressed = await compressImageBeforeUpload(file, 800, 800, 0.85);
     setPhotoBlob(compressed.blob);
     const previewUrl = URL.createObjectURL(compressed.blob);
@@ -253,6 +267,8 @@ export const OnboardingGate: React.FC<OnboardingGateProps> = ({ children, target
 
   const handleSubmitVerification = async () => {
     if (!user) return;
+    if (isSubmittingRef.current || submitting) return; // Prevent concurrent double-clicks
+
     if (!idFrontBlob) {
       setSubmitError('Please upload your official institutional ID Card.');
       return;
@@ -263,18 +279,34 @@ export const OnboardingGate: React.FC<OnboardingGateProps> = ({ children, target
       return;
     }
 
+    isSubmittingRef.current = true;
     setSubmitting(true);
     setSubmitError(null);
+    setSubmissionStage('Preparing identity documents...');
 
     try {
-      // 1. Concurrent upload to Firebase Storage
-      const storageUrls = await uploadVerificationDocumentsConcurrent({
-        userId: user.uid,
-        frontBlob: idFrontBlob,
-        backBlob: idBackBlob,
-        photoBlob: photoBlob,
-        onProgress: (progress: UploadProgressState) => setUploadProgress(progress)
-      });
+      // 1. Upload documents if not already cached from a previous attempt
+      let storageUrls = cachedStorageUrls;
+
+      if (!storageUrls) {
+        setSubmissionStage('Uploading documents to secure cloud storage...');
+        storageUrls = await uploadVerificationDocumentsConcurrent({
+          userId: user.uid,
+          institutionId: selectedInstId,
+          frontBlob: idFrontBlob,
+          backBlob: idBackBlob,
+          photoBlob: photoBlob,
+          onProgress: (progress: UploadProgressState) => {
+            setUploadProgress(progress);
+            if (progress.statusText) {
+              setSubmissionStage(progress.statusText);
+            }
+          }
+        });
+        setCachedStorageUrls(storageUrls);
+      }
+
+      setSubmissionStage('Registering verification request in campus directory...');
 
       const activeInst = institutions.find((i) => i.id === selectedInstId) || institutions[0];
       const effectiveCourse = course === 'Other / Custom Course' ? customCourse : course;
@@ -315,13 +347,16 @@ export const OnboardingGate: React.FC<OnboardingGateProps> = ({ children, target
         await submitVerificationRequest(submitPayload);
       }
 
+      setSubmissionStage('Identity verification submitted successfully!');
       await refreshProfile();
     } catch (err: unknown) {
       console.error('Submission failed:', err);
-      setSubmitError(err instanceof Error ? err.message : 'Failed to submit verification request.');
+      const msg = err instanceof Error ? err.message : 'Failed to submit verification request. Please check your network and try again.';
+      setSubmitError(msg);
+      setSubmissionStage('');
     } finally {
+      isSubmittingRef.current = false;
       setSubmitting(false);
-      setUploadProgress(null);
     }
   };
 
@@ -1122,18 +1157,33 @@ export const OnboardingGate: React.FC<OnboardingGateProps> = ({ children, target
               </div>
             </div>
 
-            {/* Upload progress indicator */}
-            {submitting && uploadProgress && (
-              <div className="space-y-2">
-                <div className="flex justify-between text-xs text-slate-600">
-                  <span>Uploading documents to secure cloud storage...</span>
-                  <span className="font-semibold">{uploadProgress.overallPercent}%</span>
+            {/* Upload progress & stage indicator */}
+            {submitting && (
+              <div className="space-y-2.5 p-3.5 bg-indigo-50/80 border border-indigo-200 rounded-lg">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="font-semibold text-indigo-900 flex items-center gap-2">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                    {submissionStage || uploadProgress?.statusText || 'Securing identity documents...'}
+                  </span>
+                  <span className="font-bold text-indigo-800 font-mono">
+                    {uploadProgress?.overallPercent !== undefined ? `${uploadProgress.overallPercent}%` : '...'}
+                  </span>
                 </div>
-                <div className="w-full bg-slate-200 rounded-full h-2">
+                <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
                   <div
-                    className="bg-indigo-600 h-2 rounded-full transition-all"
-                    style={{ width: `${uploadProgress.overallPercent}%` }}
+                    className="bg-indigo-600 h-2 rounded-full transition-all duration-300 ease-out"
+                    style={{ width: `${Math.max(8, uploadProgress?.overallPercent || 15)}%` }}
                   />
+                </div>
+              </div>
+            )}
+
+            {submitError && (
+              <div className="p-3.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-800 flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-semibold">Submission Interrupted</p>
+                  <p className="mt-0.5">{submitError}</p>
                 </div>
               </div>
             )}
@@ -1156,6 +1206,10 @@ export const OnboardingGate: React.FC<OnboardingGateProps> = ({ children, target
                 {submitting ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin" /> Submitting Request...
+                  </>
+                ) : submitError ? (
+                  <>
+                    <RefreshCw className="w-4 h-4" /> Retry Submission
                   </>
                 ) : (
                   <>

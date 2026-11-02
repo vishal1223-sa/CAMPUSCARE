@@ -11,6 +11,14 @@ export interface UploadProgressState {
   error?: string;
 }
 
+// Configure fast timeout on storage so failed uploads don't hang for 10 minutes
+try {
+  storage.maxUploadRetryTime = 6000;
+  storage.maxOperationRetryTime = 6000;
+} catch {
+  // Safe ignore if environment does not allow setting property
+}
+
 /**
  * Checks if the browser supports canvas.toBlob for WebP export
  */
@@ -27,6 +35,22 @@ const checkWebpSupport = (): boolean => {
     isWebpSupportedCache = false;
   }
   return isWebpSupportedCache;
+};
+
+/**
+ * Converts a Blob or File into a base64 encoded string
+ */
+export const blobToBase64 = (blob: Blob): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result as string;
+      const base64 = result.includes(',') ? result.split(',')[1] : result;
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 };
 
 /**
@@ -94,7 +118,60 @@ export const compressImageBeforeUpload = (
 };
 
 /**
- * Uploads a single blob using uploadBytesResumable with retry handling and real-time progress callbacks
+ * Uploads a document via the application's authenticated backend storage endpoint
+ */
+export const uploadViaBackendApi = async ({
+  userId,
+  institutionId = 'inst-main',
+  fileName,
+  contentType,
+  blob,
+  onProgress
+}: {
+  userId: string;
+  institutionId?: string;
+  fileName: string;
+  contentType: string;
+  blob: Blob;
+  onProgress?: (percent: number) => void;
+}): Promise<{ downloadUrl: string; storagePath: string }> => {
+  if (onProgress) onProgress(15);
+  const base64Data = await blobToBase64(blob);
+  if (onProgress) onProgress(45);
+
+  const response = await fetch('/api/storage/upload', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      userId,
+      institutionId,
+      fileName,
+      contentType,
+      base64Data
+    })
+  });
+
+  if (onProgress) onProgress(85);
+
+  if (!response.ok) {
+    const errData = await response.json().catch(() => null);
+    throw new Error(errData?.error || `Server storage upload failed with HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  if (onProgress) onProgress(100);
+
+  return {
+    downloadUrl: data.downloadUrl,
+    storagePath: data.storagePath
+  };
+};
+
+/**
+ * Uploads a single blob using uploadBytesResumable with progress callbacks,
+ * automatic timeout watchdog, and seamless server storage fallback.
  */
 export const uploadResumableWithRetry = async (
   blob: Blob,
@@ -102,12 +179,28 @@ export const uploadResumableWithRetry = async (
   contentType: string,
   customMetadata: Record<string, string>,
   onProgress?: (percent: number) => void,
-  maxRetries = 2
+  institutionId = 'inst-main',
+  userId?: string
 ): Promise<{ downloadUrl: string; storagePath: string }> => {
-  let attempt = 0;
+  const fileName = storagePath.split('/').pop() || `doc_${Date.now()}.webp`;
+  const effectiveUserId = userId || customMetadata.userId || 'user';
 
-  const executeUpload = (): Promise<{ downloadUrl: string; storagePath: string }> => {
+  // 1. Attempt uploadBytesResumable to Firebase Storage with a 5-second watchdog
+  const tryFirebaseStorage = (): Promise<{ downloadUrl: string; storagePath: string }> => {
     return new Promise((resolve, reject) => {
+      let isSettled = false;
+      const timeoutId = setTimeout(() => {
+        if (!isSettled) {
+          isSettled = true;
+          try {
+            uploadTask.cancel();
+          } catch {
+            // ignore
+          }
+          reject(new Error('Firebase Storage connection timed out.'));
+        }
+      }, 5000);
+
       const storageRef = ref(storage, storagePath);
       const metadata = {
         contentType,
@@ -125,50 +218,61 @@ export const uploadResumableWithRetry = async (
           }
         },
         (error) => {
-          console.error(`Upload error on ${storagePath}:`, error);
-          reject(error);
+          if (!isSettled) {
+            isSettled = true;
+            clearTimeout(timeoutId);
+            reject(error);
+          }
         },
         async () => {
-          try {
-            const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
-            if (onProgress) onProgress(100);
-            resolve({ downloadUrl, storagePath });
-          } catch (err) {
-            reject(err);
+          if (!isSettled) {
+            isSettled = true;
+            clearTimeout(timeoutId);
+            try {
+              const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
+              if (onProgress) onProgress(100);
+              resolve({ downloadUrl, storagePath });
+            } catch (err) {
+              reject(err);
+            }
           }
         }
       );
     });
   };
 
-  while (attempt <= maxRetries) {
-    try {
-      return await executeUpload();
-    } catch (err) {
-      attempt++;
-      if (attempt > maxRetries) {
-        throw new Error(`Upload failed after ${maxRetries + 1} attempts: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      // Wait 500ms before retrying
-      await new Promise((r) => setTimeout(r, 500));
-    }
-  }
+  try {
+    return await tryFirebaseStorage();
+  } catch (firebaseErr: unknown) {
+    const errMsg = firebaseErr instanceof Error ? firebaseErr.message : String(firebaseErr);
+    console.warn(`Firebase Storage notice (${errMsg}). Completing upload via secure campus storage...`);
 
-  throw new Error('Upload could not be completed.');
+    // 2. Fall back seamlessly to authenticated backend storage
+    return await uploadViaBackendApi({
+      userId: effectiveUserId,
+      institutionId,
+      fileName,
+      contentType,
+      blob,
+      onProgress
+    });
+  }
 };
 
 /**
- * Optimized concurrent upload of front, back, and profile documents
- * Uploads all files in parallel, updating individual and overall progress
+ * Concurrent upload of front, back, and profile documents
+ * Uploads files in parallel with institutional path scoping and overall progress tracking
  */
 export const uploadVerificationDocumentsConcurrent = async ({
   userId,
+  institutionId = 'inst-main',
   frontBlob,
   backBlob,
   photoBlob,
   onProgress
 }: {
   userId: string;
+  institutionId?: string;
   frontBlob: Blob;
   backBlob?: Blob | null;
   photoBlob?: Blob | null;
@@ -193,7 +297,7 @@ export const uploadVerificationDocumentsConcurrent = async ({
     if (!onProgress) return;
     const count = 1 + (hasBack ? 1 : 0) + (hasPhoto ? 1 : 0);
     const sum = frontPercent + (hasBack ? backPercent : 0) + (hasPhoto ? photoPercent : 0);
-    const overallPercent = Math.round(sum / count);
+    const overallPercent = Math.min(100, Math.round(sum / count));
 
     onProgress({
       frontPercent,
@@ -205,7 +309,7 @@ export const uploadVerificationDocumentsConcurrent = async ({
     });
   };
 
-  updateProgress('Preparing and compressing documents...');
+  updateProgress('Preparing and optimizing documents...');
 
   // 1. Client-side compression
   const [frontComp, backComp, photoComp] = await Promise.all([
@@ -215,9 +319,9 @@ export const uploadVerificationDocumentsConcurrent = async ({
   ]);
 
   const frontExt = frontComp.mimeType === 'image/webp' ? 'webp' : 'jpg';
-  const frontPath = `idCards/${userId}/front_${timestamp}.${frontExt}`;
+  const frontPath = `institutions/${institutionId}/users/${userId}/front_${timestamp}.${frontExt}`;
 
-  updateProgress('Uploading documents concurrently to Firebase Storage...');
+  updateProgress('Uploading documents to secure cloud storage...');
 
   // Upload tasks promise array for parallel execution
   const uploadPromises: [
@@ -230,24 +334,28 @@ export const uploadVerificationDocumentsConcurrent = async ({
       frontComp.blob,
       frontPath,
       frontComp.mimeType,
-      { userId, docType: 'id_front', uploadedAt: new Date().toISOString() },
+      { userId, institutionId, docType: 'id_front', uploadedAt: new Date().toISOString() },
       (p) => {
         frontPercent = p;
         updateProgress(`Uploading ID Front: ${p}%`);
-      }
+      },
+      institutionId,
+      userId
     ),
 
     // Back upload (if present)
     backComp && backBlob
       ? uploadResumableWithRetry(
           backComp.blob,
-          `idCards/${userId}/back_${timestamp}.${backComp.mimeType === 'image/webp' ? 'webp' : 'jpg'}`,
+          `institutions/${institutionId}/users/${userId}/back_${timestamp}.${backComp.mimeType === 'image/webp' ? 'webp' : 'jpg'}`,
           backComp.mimeType,
-          { userId, docType: 'id_back', uploadedAt: new Date().toISOString() },
+          { userId, institutionId, docType: 'id_back', uploadedAt: new Date().toISOString() },
           (p) => {
             backPercent = p;
             updateProgress(`Uploading ID Back: ${p}%`);
-          }
+          },
+          institutionId,
+          userId
         )
       : Promise.resolve(null),
 
@@ -255,13 +363,15 @@ export const uploadVerificationDocumentsConcurrent = async ({
     photoComp && photoBlob
       ? uploadResumableWithRetry(
           photoComp.blob,
-          `profilePhotos/${userId}/photo_${timestamp}.${photoComp.mimeType === 'image/webp' ? 'webp' : 'jpg'}`,
+          `institutions/${institutionId}/users/${userId}/photo_${timestamp}.${photoComp.mimeType === 'image/webp' ? 'webp' : 'jpg'}`,
           photoComp.mimeType,
-          { userId, docType: 'profile_photo', uploadedAt: new Date().toISOString() },
+          { userId, institutionId, docType: 'profile_photo', uploadedAt: new Date().toISOString() },
           (p) => {
             photoPercent = p;
             updateProgress(`Uploading Profile Photo: ${p}%`);
-          }
+          },
+          institutionId,
+          userId
         )
       : Promise.resolve(null)
   ];
@@ -315,11 +425,15 @@ export const uploadIdCardDocument = async (
   const comp = await compressImageBeforeUpload(file, 1400, 1400, 0.82);
   const ext = comp.mimeType === 'image/webp' ? 'webp' : 'jpg';
   const storagePath = `idCards/${userId}/${side}_${Date.now()}.${ext}`;
-  return uploadResumableWithRetry(comp.blob, storagePath, comp.mimeType, {
-    userId,
-    documentType: `id_card_${side}`,
-    uploadedAt: new Date().toISOString()
-  });
+  return uploadResumableWithRetry(
+    comp.blob,
+    storagePath,
+    comp.mimeType,
+    { userId, documentType: `id_card_${side}`, uploadedAt: new Date().toISOString() },
+    undefined,
+    'inst-main',
+    userId
+  );
 };
 
 export const uploadProfilePhotoDocument = async (
@@ -329,9 +443,13 @@ export const uploadProfilePhotoDocument = async (
   const comp = await compressImageBeforeUpload(file, 800, 800, 0.85);
   const ext = comp.mimeType === 'image/webp' ? 'webp' : 'jpg';
   const storagePath = `profilePhotos/${userId}/photo_${Date.now()}.${ext}`;
-  return uploadResumableWithRetry(comp.blob, storagePath, comp.mimeType, {
-    userId,
-    documentType: 'profile_photo',
-    uploadedAt: new Date().toISOString()
-  });
+  return uploadResumableWithRetry(
+    comp.blob,
+    storagePath,
+    comp.mimeType,
+    { userId, documentType: 'profile_photo', uploadedAt: new Date().toISOString() },
+    undefined,
+    'inst-main',
+    userId
+  );
 };

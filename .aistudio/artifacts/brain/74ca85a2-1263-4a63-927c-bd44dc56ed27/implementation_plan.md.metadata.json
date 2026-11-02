@@ -1,6 +1,6 @@
 {
-  "summary": "Urgent bug fix resolving undefined isSuperAdmin and photoURL in Firestore setDoc and updateDoc during Google login. Enforced strict boolean types, clean payload sanitization, and authoritative Super Admin storage.",
-  "updatedAt": "2026-11-02T17:43:25.608884847Z",
+  "summary": "Resolution of CampusCare student verification submission stuck at 0%. Fixed upload timeout, institution-scoped paths, robust dual-channel upload mechanism, duplicate click prevention, and multi-stage progress reporting.",
+  "updatedAt": "2026-11-02T18:13:00.539815123Z",
   "requestFeedback": true,
   "userFacing": true
 }
