@@ -9,7 +9,7 @@ import {
   where,
   getDocs
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { db, handleFirestoreError, OperationType, cleanFirestorePayload } from '../firebase';
 import {
   Complaint,
   ComplaintCategory,
@@ -129,7 +129,7 @@ export const submitComplaint = async (input: NewComplaintInput): Promise<string>
   };
 
   try {
-    await setDoc(docRef, complaintData);
+    await setDoc(docRef, cleanFirestorePayload(complaintData));
     await logActivity(
       'COMPLAINT_CREATED',
       input.studentId,

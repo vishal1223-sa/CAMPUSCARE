@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, onAuthStateChanged } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { auth, db, signInWithGoogle, signOutUser, handleFirestoreError, OperationType } from '../firebase';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { auth, db, signInWithGoogle, signOutUser, handleFirestoreError, OperationType, cleanFirestorePayload } from '../firebase';
 import { UserProfile, UserRole } from '../types';
 import { checkAndBootstrapInitialAdmin, INITIAL_SUPER_ADMIN_EMAIL } from '../services/verificationService';
 
@@ -92,12 +92,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (snap.exists()) {
         const existingData = snap.data() as UserProfile;
+        let authoritativeSuperAdmin = existingData.isSuperAdmin === true;
+
+        // If isSuperAdmin was missing/undefined in an existing document, backfill safely
+        if (typeof existingData.isSuperAdmin !== 'boolean') {
+          const adminSnap = await getDoc(doc(db, 'admins', firebaseUser.uid));
+          const adminData = adminSnap.exists() ? adminSnap.data() : null;
+          authoritativeSuperAdmin = isInitialSuperAdmin || (adminData?.isSuperAdmin === true);
+          try {
+            await updateDoc(userRef, {
+              isSuperAdmin: authoritativeSuperAdmin,
+              updatedAt: new Date().toISOString()
+            });
+          } catch (e) {
+            console.warn('Could not backfill isSuperAdmin:', e);
+          }
+        }
+
+        const normalizedProfile: UserProfile = {
+          ...existingData,
+          isSuperAdmin: authoritativeSuperAdmin
+        };
 
         // Role mismatch detection: If user clicked a portal that does NOT match their authoritative role
-        if (activePortal && activePortal !== existingData.role) {
+        if (activePortal && activePortal !== normalizedProfile.role) {
           setPortalRoleMismatch({
             targetRole: activePortal,
-            actualRole: existingData.role
+            actualRole: normalizedProfile.role
           });
         }
 
@@ -108,14 +129,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // ignore
         }
 
-        return existingData;
+        return normalizedProfile;
       } else {
         const now = new Date().toISOString();
         // Check if user is recorded in authoritative /admins/{uid}
         const adminSnap = await getDoc(doc(db, 'admins', firebaseUser.uid));
         const adminData = adminSnap.exists() ? adminSnap.data() : null;
-        const isAuthorizedAdmin = isInitialSuperAdmin || !!adminData;
-        const isSuperAdmin = isInitialSuperAdmin || !!adminData?.isSuperAdmin;
+        const isAuthorizedAdmin = isInitialSuperAdmin || (adminSnap.exists() && adminData?.role === 'admin');
+        const isSuperAdminUser = isInitialSuperAdmin || (adminSnap.exists() && adminData?.isSuperAdmin === true);
 
         let initialRole: UserRole = 'student';
         let initialStatus: 'Approved' | 'Incomplete' = 'Incomplete';
@@ -139,17 +160,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           uid: firebaseUser.uid,
           email: firebaseUser.email || '',
           displayName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Campus User',
-          photoURL: firebaseUser.photoURL || undefined,
           role: initialRole,
-          isSuperAdmin: isSuperAdmin || undefined,
+          isSuperAdmin: Boolean(isSuperAdminUser),
           verificationStatus: initialStatus,
           institutionId: 'inst-main',
           institutionName: 'University Main Campus',
           createdAt: now,
-          updatedAt: now
+          updatedAt: now,
+          ...(firebaseUser.photoURL ? { photoURL: firebaseUser.photoURL } : {})
         };
 
-        await setDoc(userRef, newProfile);
+        await setDoc(userRef, cleanFirestorePayload(newProfile));
 
         try {
           sessionStorage.removeItem(PORTAL_SESSION_KEY);
@@ -262,9 +283,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const actualRole: UserRole = profile?.role || 'student';
   const role: UserRole = actualRole;
 
-  const isSuperAdmin =
-    !!profile?.isSuperAdmin ||
-    profile?.email?.toLowerCase() === INITIAL_SUPER_ADMIN_EMAIL.toLowerCase();
+  const isSuperAdmin = profile?.isSuperAdmin === true;
   const isAdmin = actualRole === 'admin' || isSuperAdmin;
   const isStaff = actualRole === 'staff';
   const isStudent = actualRole === 'student';

@@ -57,7 +57,36 @@ export async function testConnection() {
     }
   }
 }
-testConnection();
+/**
+ * Strips undefined properties recursively from objects before writing to Firestore.
+ * Preserves FieldValue (such as deleteField(), serverTimestamp()), Date, arrays, primitives, and nulls.
+ */
+export function cleanFirestorePayload<T>(data: T): T {
+  if (data === null || data === undefined) {
+    return data;
+  }
+  if (Array.isArray(data)) {
+    return data
+      .filter((item) => item !== undefined)
+      .map((item) => cleanFirestorePayload(item)) as unknown as T;
+  }
+  if (typeof data === 'object') {
+    // Preserve custom instances, FieldValues (e.g. deleteField()), and Dates
+    const proto = Object.getPrototypeOf(data);
+    if (proto !== Object.prototype && proto !== null) {
+      return data;
+    }
+    const cleaned: Record<string, any> = {};
+    for (const [key, value] of Object.entries(data as Record<string, any>)) {
+      if (value !== undefined) {
+        cleaned[key] = cleanFirestorePayload(value);
+      }
+    }
+    return cleaned as T;
+  }
+  return data;
+}
+
 
 // Standard Firestore error handler per integration skill guidelines
 export enum OperationType {

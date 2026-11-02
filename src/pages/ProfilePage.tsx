@@ -48,14 +48,21 @@ export const ProfilePage: React.FC<ProfilePageProps> = () => {
     setLoading(true);
     setMsg(null);
     try {
-      await updateSelfProfile(user.uid, {
+      const profileUpdates: Parameters<typeof updateSelfProfile>[1] = {
         displayName: displayName.trim(),
         department: department.trim(),
-        designation: (actualRole === 'admin' || actualRole === 'staff') ? designation.trim() : undefined,
-        collegeName: actualRole === 'student' ? collegeName.trim() : undefined,
-        specialization: actualRole === 'staff' ? specialization.trim() : undefined,
         phoneNumber: phoneNumber.trim()
-      });
+      };
+      if (actualRole === 'admin' || actualRole === 'staff') {
+        profileUpdates.designation = designation.trim();
+      }
+      if (actualRole === 'student') {
+        profileUpdates.collegeName = collegeName.trim();
+      }
+      if (actualRole === 'staff') {
+        profileUpdates.specialization = specialization.trim();
+      }
+      await updateSelfProfile(user.uid, profileUpdates);
       await refreshProfile();
       setMsg({ type: 'success', text: 'Profile details saved successfully.' });
       setTimeout(() => setMsg(null), 4000);

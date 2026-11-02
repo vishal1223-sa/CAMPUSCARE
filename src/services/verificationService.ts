@@ -7,9 +7,10 @@ import {
   onSnapshot,
   query,
   orderBy,
-  runTransaction
+  runTransaction,
+  deleteField
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { db, handleFirestoreError, OperationType, cleanFirestorePayload } from '../firebase';
 import {
   VerificationRequest,
   UserProfile,
@@ -66,11 +67,10 @@ export const checkAndBootstrapInitialAdmin = async (firebaseUser: User): Promise
         });
       }
     } else {
-      await setDoc(userDocRef, {
+      const initialProfile: UserProfile = {
         uid: firebaseUser.uid,
         email: firebaseUser.email,
         displayName: firebaseUser.displayName || 'Super Administrator',
-        photoURL: firebaseUser.photoURL || undefined,
         role: 'admin',
         isSuperAdmin: true,
         verificationStatus: 'Approved',
@@ -80,8 +80,10 @@ export const checkAndBootstrapInitialAdmin = async (firebaseUser: User): Promise
         verifiedAt: now,
         verifiedBy: 'system_bootstrap',
         createdAt: now,
-        updatedAt: now
-      });
+        updatedAt: now,
+        ...(firebaseUser.photoURL ? { photoURL: firebaseUser.photoURL } : {})
+      };
+      await setDoc(userDocRef, cleanFirestorePayload(initialProfile));
     }
 
     return true;
@@ -176,28 +178,37 @@ export const submitVerificationRequest = async (
           claimedAt: now
         }, { merge: true });
 
-        transaction.set(reqRef, newRequest);
+        transaction.set(reqRef, cleanFirestorePayload(newRequest));
 
-        transaction.update(userRef, {
+        const studentUpdates: Record<string, any> = {
           verificationStatus: 'Pending Admin Approval',
           institutionId: input.institutionId,
           institutionName: input.institutionName,
           rollNumber: (input.rollNumber || '').trim(),
-          course: input.course?.trim() || undefined,
           updatedAt: now
-        });
+        };
+        if (input.course?.trim()) {
+          studentUpdates.course = input.course.trim();
+        }
+
+        transaction.update(userRef, studentUpdates);
       });
     } else {
       // Staff / Admin request
-      await setDoc(reqRef, newRequest);
-      await updateDoc(userRef, {
+      await setDoc(reqRef, cleanFirestorePayload(newRequest));
+      const staffUpdates: Record<string, any> = {
         verificationStatus: 'Pending Admin Approval',
         institutionId: input.institutionId,
         institutionName: input.institutionName,
-        designation: input.designation?.trim() || undefined,
-        specialization: input.specialization?.trim() || undefined,
         updatedAt: now
-      });
+      };
+      if (input.designation?.trim()) {
+        staffUpdates.designation = input.designation.trim();
+      }
+      if (input.specialization?.trim()) {
+        staffUpdates.specialization = input.specialization.trim();
+      }
+      await updateDoc(userRef, staffUpdates);
     }
 
     await logActivity(
@@ -235,27 +246,31 @@ export const resubmitVerificationRequest = async (
       remarks: 'Applicant resubmitted updated identity credentials and documents'
     };
 
-    const updatedData: Partial<VerificationRequest> = {
+    const updatedData: Record<string, any> = cleanFirestorePayload({
       ...updates,
       status: 'Pending Admin Approval',
       submittedAt: now,
-      rejectionRemarks: undefined,
-      reviewedAt: undefined,
-      reviewedBy: undefined,
-      reviewerName: undefined,
       verificationHistory: [...previousHistory, newHistoryItem]
-    };
+    });
+    // Explicitly delete previous review fields on resubmission
+    updatedData.rejectionRemarks = deleteField();
+    updatedData.reviewedAt = deleteField();
+    updatedData.reviewedBy = deleteField();
+    updatedData.reviewerName = deleteField();
 
     await updateDoc(reqRef, updatedData);
-    await updateDoc(userRef, {
+
+    const userUpdates: Record<string, any> = cleanFirestorePayload({
       verificationStatus: 'Pending Admin Approval',
-      rejectionReason: undefined,
       updatedAt: now,
       ...(updates.rollNumber ? { rollNumber: updates.rollNumber } : {}),
       ...(updates.course ? { course: updates.course } : {}),
       ...(updates.institutionId ? { institutionId: updates.institutionId } : {}),
       ...(updates.institutionName ? { institutionName: updates.institutionName } : {})
     });
+    userUpdates.rejectionReason = deleteField();
+
+    await updateDoc(userRef, userUpdates);
 
     await logActivity(
       'ROLE_CHANGED',

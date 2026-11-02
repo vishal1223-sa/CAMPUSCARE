@@ -1,58 +1,57 @@
-# CampusCare – Critical Landing Page, Authentication, Routing & Logout Resolution
+# CampusCare – Critical Bug Fix: Firestore Undefined Values During Google Login
 
-This update resolves the critical navigation and authentication issues where opening the published application URL would automatically redirect existing sessions into the Student onboarding flow, and logout was sluggish or failed to return cleanly to the landing page.
+This patch resolves the urgent Firestore exception that occurred during user authentication:
+`Function setDoc() called with invalid data. Unsupported field value: undefined (found in field isSuperAdmin in document users/{uid})`
 
 ***
 
 ### 1. Root Cause Analysis
 
-- **Root Cause of Automatic Student Redirection**:
-  1. In `src/App.tsx`, an uncontrolled `useEffect` hook checked `if (user && currentTab === 'landing')` and automatically mutated `currentTab` into `'student-dashboard'` (or `'admin-dashboard'`). Whenever a browser had a cached Firebase Auth token (from a prior session or background Google sign-in), the landing page was preempted on page load.
-  2. In `src/App.tsx`, the entire `<main>` element was wrapped in `<OnboardingGate>`. If an authenticated account had an unapproved or incomplete verification status, `<OnboardingGate>` intercepted the entire viewport, preventing the public `LandingPage` component from ever rendering.
-  3. `AuthContext` defaulted unprofiled sessions to `'student'`, erroneously treating newly signed-in accounts or background sessions as students.
+1. **`isSuperAdmin: isSuperAdmin || undefined` in `src/context/AuthContext.tsx`**:
+   - For regular users (Students and Staff), `isSuperAdmin` evaluated to `false`.
+   - The expression `false || undefined` resolved to `undefined`.
+   - Passing `isSuperAdmin: undefined` into `setDoc(userRef, newProfile)` caused the Firestore SDK to reject the write with a fatal exception.
 
-- **Root Cause of Logout Failure & Lag**:
-  1. In `src/components/Navbar.tsx`, clicking Sign Out called `signOut()` asynchronously without disabling the button, showing no immediate loading feedback, and without navigating to `/` with history replacement.
-  2. The authenticated dashboard and onboarding components remained mounted while Firebase torn down the socket connection.
+2. **`photoURL: firebaseUser.photoURL || undefined`**:
+   - If a Google account had no profile avatar or `photoURL` was `null`, `null || undefined` resulted in `photoURL: undefined`.
+   - Firestore rejected the document write whenever an avatar was absent.
+
+3. **`undefined` Passed into `updateDoc` and Transaction Updates**:
+   - In `verificationService.ts`, resubmissions passed `rejectionRemarks: undefined`, `reviewedAt: undefined`, `reviewedBy: undefined`, and `reviewerName: undefined` to `updateDoc`. Firestore requires `deleteField()` rather than `undefined` to clear properties.
+   - In `OnboardingGate.tsx` and `ProfilePage.tsx`, optional fields (e.g., `designation`, `collegeName`, `specialization`) were using ternary expressions returning `undefined` rather than omitting the keys or using sanitized objects.
 
 ***
 
-### 2. Architecture & Key Changes
+### 2. Architecture & Data Model Fixes
 
-1. **Dedicated React Router Configuration**:
-   - Installed `react-router-dom` and wrapped the application in a clean `BrowserRouter` layout.
-   - Root URL `/` is mapped directly to `<LandingPage />` unconditionally. Opening `/` in a fresh browser or in a browser with an existing Google account **always** displays the public Landing Page with the 3 portal cards.
-   - Portal routes are explicitly separated:
-     - `/student/*`: Student Dashboard and Complaint views.
-     - `/staff/*`: Staff Assigned Queue and History.
-     - `/admin/*`: Administrator Console, Verifications, User Governance, and Analytics.
-     - `/profile`: User Profile details.
-     - `*`: Safe fallback redirect to `/`.
+1. **Strict Boolean Typing & Object Construction**:
+   - Updated `UserProfile.isSuperAdmin` in `src/types.ts` to strict `boolean` (never `boolean | undefined`).
+   - For newly created profiles in `AuthContext.tsx`:
+     - Regular user profiles are initialized with `isSuperAdmin: false` explicitly.
+     - Authorized Super Admins are initialized with `isSuperAdmin: true`.
+     - Optional fields (like `photoURL`) are conditionally included only when valid strings exist (`...(firebaseUser.photoURL ? { photoURL: firebaseUser.photoURL } : {})`).
 
-2. **Scoped Protected Routes (`<ProtectedRoute />`)**:
-   - Removed `<OnboardingGate>` from wrapping the global app layout.
-   - Created `<ProtectedRoute portalRole={...}>`:
-     - If unauthenticated: Safely redirects to `/` without flashing private views.
-     - If authenticated with a mismatching role: Displays the Institutional Role Notice, preserving RBAC integrity and preventing unauthorized cross-portal access.
-     - If authenticated with matching role: Applies `<OnboardingGate>` specifically to that portal's dashboard if verification is pending or incomplete.
+2. **Preservation of Existing Profiles & Backfill Safety**:
+   - For existing user profiles, `existingData.isSuperAdmin === true` is strictly preserved and never overwritten with `false`.
+   - If legacy user records lacked the `isSuperAdmin` field (i.e. `typeof existingData.isSuperAdmin !== 'boolean'`), the authoritative `/admins/{uid}` document is queried, and the boolean value is safely backfilled without risk of privilege escalation.
 
-3. **Instantaneous & Atomic Logout Flow**:
-   - Added `isLoggingOut` state to `AuthContext`.
-   - In `Navbar.tsx`, clicking Sign Out immediately disables the button and displays a spinning `<RefreshCw />` indicator.
-   - React state (`user`, `profile`, `selectedPortal`) is reset in memory before awaiting `signOut(auth)`.
-   - Navigates immediately to `/` with history replacement (`navigate('/', { replace: true })`), unmounting all authenticated components instantaneously.
+3. **Authoritative Super Admin Bootstrap & Access Control**:
+   - Preserved designated root Super Admin: `vishalkokkula07@gmail.com`.
+   - Authoritative Super Admin status is written to `/admins/{uid}` and `/users/{uid}` with `isSuperAdmin: true`.
+   - The runtime `isSuperAdmin` state in `AuthContext` checks `profile?.isSuperAdmin === true` directly, rather than relying on client-side email string matching alone.
 
-4. **Portal-Specific Authentication**:
-   - The landing page presents 3 clickable portal cards: **Student Portal**, **Staff Portal**, and **Admin Portal**.
-   - Authentication begins only when a user explicitly clicks one of these cards.
-   - If an already signed-in user clicks a portal card:
-     - If their authoritative role matches the portal, they proceed to that portal's route.
-     - If their role does not match, an in-page role mismatch notice directs them to their authorized dashboard.
+4. **Recursive Payload Sanitizer (`cleanFirestorePayload`)**:
+   - Implemented and exported `cleanFirestorePayload<T>` in `src/firebase.ts`.
+   - Recursively traverses objects and strips any keys with `undefined` values while preserving FieldValues (`deleteField()`, `serverTimestamp()`), Dates, and arrays.
+   - Applied across `AuthContext`, `verificationService`, `usersService`, `complaintsService`, and `institutionService`.
+
+5. **Proper Field Deletion in `updateDoc`**:
+   - In `resubmitVerificationRequest`, replaced `undefined` with `deleteField()` for review metadata (`rejectionRemarks`, `reviewedAt`, `reviewedBy`, `reviewerName`, and `rejectionReason`).
 
 ***
 
 ### 3. Verification & Build Results
 
 - **`tsc --noEmit`**: 0 errors.
-- **`compile_applet`**: Applet build succeeded cleanly.
+- **`compile_applet`**: Production build completed successfully.
 - **Dev Server**: Running on port 3000.

@@ -60,7 +60,7 @@ export interface UserProfile {
   displayName: string;
   photoURL?: string;
   role: UserRole;
-  isSuperAdmin?: boolean;
+  isSuperAdmin: boolean;
   verificationStatus: VerificationStatus;
   institutionId?: string;
   institutionName?: string;

@@ -281,36 +281,38 @@ export const OnboardingGate: React.FC<OnboardingGateProps> = ({ children, target
 
       // 2. Submit verification request to Firestore
       if (isResubmitting) {
-        await resubmitVerificationRequest(user.uid, {
+        const resubmitPayload: Parameters<typeof resubmitVerificationRequest>[1] = {
           institutionId: selectedInstId,
           institutionName: activeInst.name,
-          rollNumber: effectiveRole === 'student' ? rollNumber.trim() : undefined,
-          course: effectiveRole === 'student' ? effectiveCourse.trim() : undefined,
-          designation: effectiveRole !== 'student' ? designation.trim() : undefined,
-          specialization: effectiveRole === 'staff' ? specialization : undefined,
           idCardFrontUrl: storageUrls.frontUrl,
-          idCardBackUrl: storageUrls.backUrl,
-          profilePhotoUrl: storageUrls.photoUrl,
-          automatedCheck: automatedCheck || undefined
-        });
+          ...(storageUrls.backUrl ? { idCardBackUrl: storageUrls.backUrl } : {}),
+          ...(storageUrls.photoUrl ? { profilePhotoUrl: storageUrls.photoUrl } : {}),
+          ...(automatedCheck ? { automatedCheck } : {}),
+          ...(effectiveRole === 'student' && rollNumber.trim() ? { rollNumber: rollNumber.trim() } : {}),
+          ...(effectiveRole === 'student' && effectiveCourse?.trim() ? { course: effectiveCourse.trim() } : {}),
+          ...(effectiveRole !== 'student' && designation.trim() ? { designation: designation.trim() } : {}),
+          ...(effectiveRole === 'staff' && specialization ? { specialization } : {})
+        };
+        await resubmitVerificationRequest(user.uid, resubmitPayload);
         setIsResubmitting(false);
       } else {
-        await submitVerificationRequest({
+        const submitPayload: Parameters<typeof submitVerificationRequest>[0] = {
           userId: user.uid,
           userEmail: user.email || '',
           userName: fullName.trim(),
           requestedRole: effectiveRole,
           institutionId: selectedInstId,
           institutionName: activeInst.name,
-          rollNumber: effectiveRole === 'student' ? rollNumber.trim() : undefined,
-          course: effectiveRole === 'student' ? effectiveCourse.trim() : undefined,
-          designation: effectiveRole !== 'student' ? designation.trim() : undefined,
-          specialization: effectiveRole === 'staff' ? specialization : undefined,
           idCardFrontUrl: storageUrls.frontUrl,
-          idCardBackUrl: storageUrls.backUrl,
-          profilePhotoUrl: storageUrls.photoUrl,
-          automatedCheck: automatedCheck || undefined
-        });
+          ...(storageUrls.backUrl ? { idCardBackUrl: storageUrls.backUrl } : {}),
+          ...(storageUrls.photoUrl ? { profilePhotoUrl: storageUrls.photoUrl } : {}),
+          ...(automatedCheck ? { automatedCheck } : {}),
+          ...(effectiveRole === 'student' && rollNumber.trim() ? { rollNumber: rollNumber.trim() } : {}),
+          ...(effectiveRole === 'student' && effectiveCourse?.trim() ? { course: effectiveCourse.trim() } : {}),
+          ...(effectiveRole !== 'student' && designation.trim() ? { designation: designation.trim() } : {}),
+          ...(effectiveRole === 'staff' && specialization ? { specialization } : {})
+        };
+        await submitVerificationRequest(submitPayload);
       }
 
       await refreshProfile();

@@ -8,7 +8,7 @@ import {
   query,
   orderBy
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { db, handleFirestoreError, OperationType, cleanFirestorePayload } from '../firebase';
 import { UserProfile, UserRole } from '../types';
 import { logActivity } from './complaintsService';
 import { INITIAL_SUPER_ADMIN_EMAIL } from './verificationService';
@@ -104,10 +104,11 @@ export const updateSelfProfile = async (
 ) => {
   const userRef = doc(db, 'users', userId);
   try {
-    await updateDoc(userRef, {
+    const payload = cleanFirestorePayload({
       ...updates,
       updatedAt: new Date().toISOString()
     });
+    await updateDoc(userRef, payload);
   } catch (err: unknown) {
     handleFirestoreError(err, OperationType.UPDATE, `users/${userId}`);
     throw err;

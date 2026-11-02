@@ -9,7 +9,7 @@ import {
   where,
   onSnapshot
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { db, handleFirestoreError, OperationType, cleanFirestorePayload } from '../firebase';
 import { Institution, AdminInvitation } from '../types';
 import { DEFAULT_COURSE_ALIASES } from './courseService';
 import { logActivity } from './complaintsService';
@@ -137,7 +137,7 @@ export const createAdminInvitation = async (
   };
 
   try {
-    await setDoc(doc(db, 'adminInvitations', inviteCode), invitation);
+    await setDoc(doc(db, 'adminInvitations', inviteCode), cleanFirestorePayload(invitation));
 
     await logActivity(
       'ADMIN_INVITED',
