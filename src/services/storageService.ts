@@ -1,5 +1,5 @@
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { storage } from '../firebase';
+import { storage, auth } from '../firebase';
 
 export interface UploadProgressState {
   frontPercent: number;
@@ -10,6 +10,29 @@ export interface UploadProgressState {
   isUploading: boolean;
   error?: string;
 }
+
+/**
+ * Returns the configured backend API base URL.
+ * Supports VITE_API_BASE_URL or VITE_BACKEND_URL (e.g. when frontend is deployed on Vercel).
+ */
+export const getApiBaseUrl = (): string => {
+  const envBase = (
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL) ||
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_BACKEND_URL) ||
+    ''
+  ).trim();
+
+  if (envBase) {
+    return envBase.replace(/\/+$/, '');
+  }
+
+  if (typeof window !== 'undefined') {
+    const globalUrl = (window as unknown as { __CAMPUSCARE_API_URL__?: string }).__CAMPUSCARE_API_URL__;
+    if (globalUrl) return globalUrl.replace(/\/+$/, '');
+  }
+
+  return '';
+};
 
 // Configure fast timeout on storage so failed uploads don't hang for 10 minutes
 try {
@@ -139,32 +162,80 @@ export const uploadViaBackendApi = async ({
   const base64Data = await blobToBase64(blob);
   if (onProgress) onProgress(45);
 
-  const response = await fetch('/api/storage/upload', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      userId,
-      institutionId,
-      fileName,
-      contentType,
-      base64Data
-    })
-  });
+  const baseUrl = getApiBaseUrl();
+  const uploadUrl = `${baseUrl}/api/storage/upload`;
+
+  // Attach Firebase Auth ID token if available
+  let authToken: string | null = null;
+  try {
+    if (auth.currentUser) {
+      authToken = await auth.currentUser.getIdToken();
+    }
+  } catch {
+    // Non-blocking
+  }
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
+  if (authToken) {
+    headers['Authorization'] = `Bearer ${authToken}`;
+  }
+
+  if (onProgress) onProgress(65);
+
+  let response: Response;
+  try {
+    response = await fetch(uploadUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        userId,
+        institutionId,
+        fileName,
+        contentType,
+        base64Data
+      })
+    });
+  } catch (netErr: unknown) {
+    throw new Error(
+      `Network connection failed while uploading to ${uploadUrl}. Please verify your internet connection or backend server availability.`
+    );
+  }
 
   if (onProgress) onProgress(85);
 
   if (!response.ok) {
-    const errData = await response.json().catch(() => null);
-    throw new Error(errData?.error || `Server storage upload failed with HTTP ${response.status}`);
+    let serverErrorText = '';
+    try {
+      const errJson = await response.json();
+      serverErrorText = errJson?.error || errJson?.details || '';
+    } catch {
+      serverErrorText = await response.text().catch(() => '');
+    }
+
+    if (response.status === 404) {
+      throw new Error(
+        `Backend upload endpoint not found (HTTP 404 at ${uploadUrl}). If your frontend is deployed separately on Vercel, please configure VITE_API_BASE_URL to point to your live CampusCare backend server.`
+      );
+    }
+
+    throw new Error(
+      serverErrorText || `Server storage upload failed with HTTP status ${response.status}`
+    );
   }
 
   const data = await response.json();
   if (onProgress) onProgress(100);
 
+  // Ensure download URL is fully qualified if backend returned relative path and baseUrl is configured
+  let downloadUrl = data.downloadUrl as string;
+  if (downloadUrl && downloadUrl.startsWith('/') && baseUrl) {
+    downloadUrl = `${baseUrl}${downloadUrl}`;
+  }
+
   return {
-    downloadUrl: data.downloadUrl,
+    downloadUrl,
     storagePath: data.storagePath
   };
 };
