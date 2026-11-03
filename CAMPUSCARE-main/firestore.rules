@@ -1,0 +1,112 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isUser(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Authoritative check against the /admins collection
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isApprovedStaff() {
+      return isSignedIn() && (
+        isAdmin() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'staff' &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.verificationStatus == 'Approved')
+      );
+    }
+
+    // Admins Collection: Private to authorized admins (and self-check for identity)
+    match /admins/{userId} {
+      allow read: if isAdmin() || isUser(userId);
+      allow write: if isAdmin();
+    }
+
+    // Institutions Collection: Public read to signed-in campus users, written by Admins
+    match /institutions/{institutionId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Single-use Admin Invitations: Read and claimed by signed-in users, created by Admins
+    match /adminInvitations/{invitationId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Atomic unique locks for Roll Numbers to prevent duplicate registration
+    match /claimedInstitutionalIds/{id} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // Verification Requests Collection
+    match /verificationRequests/{userId} {
+      allow read: if isUser(userId) || isAdmin();
+      allow create: if isUser(userId);
+      allow update: if isAdmin() || (
+        isUser(userId) &&
+        (resource.data.status == 'Rejected' || resource.data.status == 'Resubmission Required') &&
+        request.resource.data.userId == userId
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isUser(userId) || isAdmin();
+      allow update: if isAdmin() || (
+        isUser(userId) &&
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.verificationStatus == resource.data.verificationStatus
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Complaints Collection
+    match /complaints/{complaintId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && (
+        isAdmin() ||
+        request.resource.data.studentId == request.auth.uid
+      );
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (
+          resource.data.studentId == request.auth.uid &&
+          (resource.data.status == 'Submitted' || request.resource.data.status == 'Cancelled')
+        ) ||
+        (
+          (resource.data.assignedStaffId == request.auth.uid || isApprovedStaff()) &&
+          request.resource.data.studentId == resource.data.studentId
+        )
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Activity Logs Collection: Immutable audit logs
+    match /activityLogs/{logId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if false;
+    }
+  }
+}

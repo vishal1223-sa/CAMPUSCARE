@@ -1,0 +1,191 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "CampusCare registered user profile",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["student", "staff", "admin"] },
+        "isSuperAdmin": { "type": "boolean" },
+        "verificationStatus": { "type": "string", "enum": ["Incomplete", "Pending Verification", "Pending Admin Approval", "Approved", "Rejected", "Resubmission Required"] },
+        "institutionId": { "type": "string" },
+        "institutionName": { "type": "string" },
+        "rollNumber": { "type": "string" },
+        "course": { "type": "string" },
+        "designation": { "type": "string" },
+        "specialization": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "verifiedAt": { "type": "string", "format": "date-time" },
+        "verifiedBy": { "type": "string" },
+        "rejectionReason": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "role", "verificationStatus"]
+    },
+    "VerificationRequest": {
+      "title": "VerificationRequest",
+      "description": "User identity verification request with institutional ID and photos",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "userName": { "type": "string" },
+        "requestedRole": { "type": "string", "enum": ["student", "staff", "admin"] },
+        "institutionId": { "type": "string" },
+        "institutionName": { "type": "string" },
+        "rollNumber": { "type": "string" },
+        "course": { "type": "string" },
+        "designation": { "type": "string" },
+        "specialization": { "type": "string" },
+        "idCardFrontUrl": { "type": "string" },
+        "idCardBackUrl": { "type": "string" },
+        "profilePhotoUrl": { "type": "string" },
+        "automatedCheck": { "type": "object" },
+        "status": { "type": "string" },
+        "submittedAt": { "type": "string", "format": "date-time" },
+        "reviewedAt": { "type": "string", "format": "date-time" },
+        "reviewedBy": { "type": "string" },
+        "reviewerName": { "type": "string" },
+        "rejectionRemarks": { "type": "string" },
+        "verificationHistory": { "type": "array" }
+      },
+      "required": ["userId", "userEmail", "requestedRole", "institutionId", "status", "submittedAt"]
+    },
+    "Institution": {
+      "title": "Institution",
+      "description": "Educational institution profile and course alias dictionary",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "superAdminEmails": { "type": "array" },
+        "courseAliases": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "code", "createdAt"]
+    },
+    "AdminInvitation": {
+      "title": "AdminInvitation",
+      "description": "Single-use cryptographically issued invitation for new Admins",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "institutionId": { "type": "string" },
+        "invitedEmail": { "type": "string" },
+        "invitedBy": { "type": "string" },
+        "invitedByName": { "type": "string" },
+        "status": { "type": "string", "enum": ["Pending", "Accepted", "Revoked", "Expired"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "institutionId", "invitedEmail", "invitedBy", "status", "createdAt", "expiresAt"]
+    },
+    "Complaint": {
+      "title": "Complaint",
+      "description": "Campus maintenance or facility complaint",
+      "type": "object",
+      "properties": {
+        "complaintId": { "type": "string" },
+        "title": { "type": "string", "minLength": 5, "maxLength": 120 },
+        "description": { "type": "string", "minLength": 10, "maxLength": 1000 },
+        "category": { "type": "string", "enum": ["Electrical", "Plumbing", "Cleanliness", "Classroom", "Laboratory", "Furniture", "Internet", "Other"] },
+        "priority": { "type": "string", "enum": ["Low", "Medium", "High", "Emergency"] },
+        "location": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "studentEmail": { "type": "string" },
+        "institutionId": { "type": "string" },
+        "assignedStaffId": { "type": "string" },
+        "assignedStaffName": { "type": "string" },
+        "status": { "type": "string", "enum": ["Submitted", "Assigned", "In Progress", "Resolved", "Cancelled"] },
+        "slaTargetAt": { "type": "string", "format": "date-time" },
+        "resolutionRemarks": { "type": "string", "maxLength": 1000 },
+        "resolvedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "statusHistory": { "type": "array" }
+      },
+      "required": ["complaintId", "title", "description", "category", "priority", "location", "studentId", "status", "createdAt", "updatedAt"]
+    },
+    "ActivityLog": {
+      "title": "ActivityLog",
+      "description": "Audit trail log for all actions",
+      "type": "object",
+      "properties": {
+        "logId": { "type": "string" },
+        "action": { "type": "string" },
+        "actorId": { "type": "string" },
+        "actorName": { "type": "string" },
+        "targetId": { "type": "string" },
+        "details": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["logId", "action", "actorId", "actorName", "targetId", "details", "timestamp"]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "Administrator authority marker",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "isSuperAdmin": { "type": "boolean" },
+        "grantedAt": { "type": "string", "format": "date-time" },
+        "role": { "type": "string" }
+      },
+      "required": ["email", "role"]
+    },
+    "ClaimedInstitutionalId": {
+      "title": "ClaimedInstitutionalId",
+      "description": "Atomic unique lock record to prevent duplicate institutional roll numbers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "institutionId": { "type": "string" },
+        "rollNumber": { "type": "string" },
+        "userId": { "type": "string" },
+        "claimedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "claimedAt"]
+    }
+  },
+  "firestore": {
+    "/institutions/{institutionId}": {
+      "schema": "Institution",
+      "description": "Multi-institution campus records and course aliases"
+    },
+    "/adminInvitations/{invitationId}": {
+      "schema": "AdminInvitation",
+      "description": "Cryptographically issued single-use invitations for administrators"
+    },
+    "/claimedInstitutionalIds/{id}": {
+      "schema": "ClaimedInstitutionalId",
+      "description": "Atomic unique locks for Roll Numbers per campus"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile collection containing role definitions and verification status"
+    },
+    "/verificationRequests/{userId}": {
+      "schema": "VerificationRequest",
+      "description": "Institutional identity verification submissions awaiting administrator approval"
+    },
+    "/complaints/{complaintId}": {
+      "schema": "Complaint",
+      "description": "Campus complaints and maintenance tasks"
+    },
+    "/activityLogs/{logId}": {
+      "schema": "ActivityLog",
+      "description": "Immutable log trail for accountability"
+    },
+    "/admins/{userId}": {
+      "schema": "Admin",
+      "description": "Authoritative admin mapping for rule checks"
+    }
+  }
+}
