@@ -1086,17 +1086,17 @@ export const OnboardingGate: React.FC<OnboardingGateProps> = ({ children, target
               <button
                 type="button"
                 onClick={() => {
-                  if (!idFrontBlob) {
-                    setSubmitError('Please upload your ID card image first.');
-                    return;
-                  }
-                  if (effectiveRole !== 'student' && !photoBlob) {
-                    setSubmitError('Please capture or upload your profile photograph.');
-                    return;
-                  }
-                  setSubmitError(null);
-                  setStep(3);
-                }}
+                 if (!idFrontBlob) {
+                   setSubmitError('Please upload your ID card image first.');
+                   return;
+                 }
+                 if (effectiveRole !== 'student' && !photoBlob) {
+                   setSubmitError('Please capture or upload your profile photograph.');
+                   return;
+                }
+                   setSubmitError(null);
+                   handleSubmitVerification();
+}}
                 className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold shadow-sm transition cursor-pointer"
               >
                 Review & Submit <ArrowRight className="w-4 h-4" />
