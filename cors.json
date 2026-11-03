@@ -1,0 +1,12 @@
+[
+  {
+    "origin": [
+      "https://ais-dev-fj2lfzkpvuyhzvmmmxpapn-710590940885.asia-southeast1.run.app",
+      "https://ais-pre-fj2lfzkpvuyhzvmmmxpapn-710590940885.asia-southeast1.run.app",
+      "https://campuscareportal-431866457037.asia-southeast1.run.app"
+    ],
+    "method": ["GET", "PUT", "POST", "HEAD"],
+    "maxAgeSeconds": 3600,
+    "responseHeader": ["Content-Type", "Authorization", "x-goog-resumable"]
+  }
+]
